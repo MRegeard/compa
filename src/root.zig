@@ -13,7 +13,7 @@ pub fn Compa(comptime Context: type, comptime commands: []const Command) type {
     const cmds_len: usize = commands.len;
     return struct {
         pub const Tag = blk: {
-            const TagType: type = @Int(.unsigned, commands.len);
+            const TagType: type = std.math.IntFittingRange(0, commands.len);
             var names: [cmds_len][]const u8 = undefined;
             var values: [cmds_len]TagType = undefined;
             for (commands, 0..) |cmd, i| {
@@ -44,29 +44,20 @@ pub fn Compa(comptime Context: type, comptime commands: []const Command) type {
             return struct {
                 // parseOption here
                 options: command.handler.Options,
-                pub fn run(self: @This()) anyerror!void {
-                    _ = self;
-                    return command.handler.run();
-                }
             };
         }
 
-        pub fn parse(allocator: Allocator, args: Args) !Parsed {
-            var arg_it = try args.iterateAllocator(allocator);
-            defer arg_it.deinit();
-            _ = arg_it.skip();
-            if (arg_it.next()) |arg| {
-                const tag = std.meta.stringToEnum(Tag, arg) orelse return error.UnknownCommand;
-                return switch (tag) {
-                    inline else => |t| blk: {
-                        const cmd = commands[@intFromEnum(t)];
-                        var options: cmd.handler.Options = .{};
-                        _ = &options;
-                        break :blk @unionInit(Parsed, @tagName(t), .{ .options = options });
-                    },
-                };
-            }
-            return error.MissingCommand;
+        pub fn parse(args: []const [:0]const u8) !Parsed {
+            if (args.len < 2) return error.MissingCommand;
+            const tag = std.meta.stringToEnum(Tag, args[1]) orelse return error.UnknownCommand;
+            return switch (tag) {
+                inline else => |t| blk: {
+                    const cmd = commands[@intFromEnum(t)];
+                    var options: cmd.handler.Options = .{};
+                    _ = &options;
+                    break :blk @unionInit(Parsed, @tagName(t), .{ .options = options });
+                },
+            };
         }
 
         pub fn run(parsed: Parsed, ctx: Context) !void {
