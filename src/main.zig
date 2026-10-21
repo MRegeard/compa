@@ -47,9 +47,9 @@ const commands: [3]compa.Command = .{
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const io = init.io;
-    const args = init.minimal.args;
+    const args = try init.minimal.args.toSlice(allocator);
 
     const App = compa.Compa(Context, &commands);
-    const parsed = try App.parse(allocator, args);
+    const parsed = try App.parse(args);
     try App.run(parsed, .{ .gpa = allocator, .io = io });
 }
