@@ -74,7 +74,9 @@ pub fn Compa(comptime Context: type, comptime commands: []const Command) type {
             var args: std.meta.ArgsTuple(F) = undefined;
             inline for (@typeInfo(F).@"fn".params, 0..) |param, i| {
                 const T = param.type orelse @compileError("Generic parameters not supported in run.");
-                args[i] = if (T == handler.Options) opts else fromContext(T, ctx);
+                args[i] = if (T == handler.Options) opts
+                    else if (T == Context) ctx
+                    else fromContext(T, ctx);
             }
             return @call(.auto, handler.run, args);
         }
