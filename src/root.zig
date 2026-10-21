@@ -85,7 +85,7 @@ pub fn Compa(comptime Context: type, comptime commands: []const Command) type {
                 const T = param.type orelse @compileError("Generic parameters not supported in run.");
                 args[i] = if (T == handler.Options) opts else fromContext(T, ctx);
             }
-            try @call(.auto, handler.run, args);
+            return @call(.auto, handler.run, args);
         }
 
         fn fromContext(comptime T: type, ctx: Context) T {
