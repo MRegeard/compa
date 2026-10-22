@@ -4,32 +4,41 @@ const Allocator = std.mem.Allocator;
 const Args = std.process.Args;
 
 const compa = @import("compa");
+const Command = compa.Command;
+const Cli = compa.Cli;
+const Option = compa.Option;
 
-const Init = struct {
-    pub const Options = struct {
-        force: bool = false
-    };
-    pub fn run(gpa: Allocator, opts: Options) !void {
+const InitHandler = struct {
+    pub fn run(gpa: Allocator, opts: init_command.options) !void {
         _ = gpa;
         std.debug.print("Init: force = {any}\n", .{opts.force});
     }
 };
-
-const Fetch = struct {
-    pub const Options = struct {
-        url: []const u8 = ""
-    };
-    pub fn run(io: Io, opts: Options) !void {
-        _ = io;
-        std.debug.print("Fetch: url = {s}\n", .{opts.url});
-    }
+const init_command: Command = .{
+    .name = "init",
+    .description = "initialize ...",
+    .handler = InitHandler,
+    .options = struct {
+        force: usize = 0,
+    },
+    .option_info = &.{
+        .{
+            .longname = "force",
+            .shortname = "f",
+            .description = "Force ...",
+        },
+    },
 };
 
-const Version = struct {
-    pub const Options = struct {};
+const VersionHandler = struct {
     pub fn run() !void {
         std.debug.print("Version\n", .{});
     }
+};
+const version_command: Command = .{
+    .name = "version",
+    .description = "Version ...",
+    .handler = VersionHandler,
 };
 
 const Context = struct {
@@ -37,19 +46,14 @@ const Context = struct {
     io: Io,
 };
 
-const commands: [3]compa.Command = .{
-    .{ .name = "init", .handler = Init },
-    .{ .name = "fetch", .handler = Fetch },
-    .{ .name = "version", .handler = Version },
-};
-
+const commands: [2]compa.Command = .{ init_command, version_command };
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const io = init.io;
     const args = try init.minimal.args.toSlice(allocator);
 
-    const App = compa.Compa(Context, &commands);
-    const parsed = try App.parse(args);
-    try App.run(parsed, .{ .gpa = allocator, .io = io });
+    const cli = Cli(Context, &commands);
+    const parsed = try cli.parse(args);
+    try cli.run(parsed, .{ .gpa = allocator, .io = io });
 }

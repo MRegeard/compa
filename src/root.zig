@@ -1,15 +1,44 @@
 const std = @import("std");
-const Attributes = std.builtin.Type.UnionField.Attributes;
 const Args = std.process.Args;
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
-pub const Command = struct {
-    name: []const u8,
-    handler: type,
+pub const PositionalArgument = struct {
+    arg_type: type,
+    type_info: std.builtin.Type,
+    delimiter: u8 = ' ',
+
+    pub fn init(comptime t: type) PositionalArgument {
+        const info = @typeInfo(t);
+        return switch (info) {
+            .int,
+            .float,
+            .bool,
+            => .{ .arg_type = t, .type_info = info },
+            .pointer => |ptr| {
+                if (ptr.size == .slice and ptr.is_const and ptr.child == u8) .{ .arg_type = t, .type_info = info };
+                @compileError("Unsupported expected type, int, float, bool and string slice ([]const u8) are currently supported.");
+            },
+            else => @compileError("Unsupported expected type, int, float, bool and string slice ([]const u8) are currently supported."),
+        };
+    }
 };
 
-pub fn Compa(comptime Context: type, comptime commands: []const Command) type {
+pub const OptionInfo = struct {
+    longname: []const u8,
+    shortname: []const u8,
+    description: []const u8 = "",
+};
+
+pub const Command = struct {
+    name: []const u8,
+    description: []const u8 = "",
+    options: type = struct {},
+    handler: ?type = null,
+    option_info: []const OptionInfo = &.{},
+};
+
+pub fn Cli(comptime Context: type, comptime commands: []const Command) type {
     const cmds_len: usize = commands.len;
     return struct {
         pub const Tag = blk: {
@@ -28,7 +57,7 @@ pub fn Compa(comptime Context: type, comptime commands: []const Command) type {
         pub const Parsed = blk: {
             var field_names: [cmds_len][]const u8 = undefined;
             var field_types: [cmds_len]type = undefined;
-            var field_attrs: [cmds_len]Attributes = undefined;
+            var field_attrs: [cmds_len]std.builtin.Type.UnionField.Attributes = undefined;
             for (commands, 0..) |cmd, i| {
                 field_names[i] = cmd.name;
                 field_types[i] = Payload(cmd);
@@ -43,7 +72,7 @@ pub fn Compa(comptime Context: type, comptime commands: []const Command) type {
         fn Payload(comptime command: Command) type {
             return struct {
                 // parseOption here
-                options: command.handler.Options,
+                options: command.options,
             };
         }
 
@@ -53,32 +82,82 @@ pub fn Compa(comptime Context: type, comptime commands: []const Command) type {
             return switch (tag) {
                 inline else => |t| blk: {
                     const cmd = commands[@intFromEnum(t)];
-                    var options: cmd.handler.Options = .{};
-                    _ = &options;
+                    const options = try parseOptions(cmd, args[2..]);
                     break :blk @unionInit(Parsed, @tagName(t), .{ .options = options });
                 },
             };
         }
 
+        // For testing only 1 arg is parse as option, only bool options.
+        fn parseOptions(comptime cmd: Command, args: []const [:0]const u8) !cmd.options {
+            const Options = cmd.options;
+            var options: Options = .{};
+            var i: usize = 0;
+            while (i < args.len) : (i += 1) {
+                const arg = args[i];
+                matched: {
+                    inline for (@typeInfo(Options).@"struct".fields) |field| {
+                        const short = comptime shortFor(cmd, field.name);
+                        if (matches(field.name, short, arg)) {
+                            if (field.type == bool) {
+                                @field(options, field.name) = true;
+                            } else {
+                                i += 1;
+                                if (i >= args.len) return error.MissingValue;
+                                @field(options, field.name) = try parseValue(field.type, args[i]);
+                            }
+                            break :matched;
+                        }
+                    }
+                    return error.UnknownOption;
+                }
+            }
+            return options;
+        }
+
+        fn parseValue(comptime T: type, arg: []const u8) !T {
+            return switch (@typeInfo(T)) {
+                .int => try std.fmt.parseInt(T, arg, 0),
+                .float => try std.fmt.parseFloat(T, arg),
+                .optional => |o| try parseValue(o.child, arg),
+                else => if (T == []const u8) arg else @compileError("Unsupported option type: " ++ @typeName(T)),
+            };
+        }
+
+        fn matches(comptime long: []const u8, comptime short: ?[]const u8, arg: []const u8) bool {
+            if (std.mem.startsWith(u8, arg, "--")) {
+                return std.mem.eql(u8, arg[2..], long);
+            }
+            if (short) |s| {
+                if (arg.len > 1 and arg[0] == '-') return std.mem.eql(u8, arg[1..], s);
+            }
+            return false;
+        }
+
+        fn shortFor(comptime cmd: Command, comptime field_name: []const u8) ?[]const u8 {
+            for (cmd.option_info) |info| {
+                if (std.mem.eql(u8, info.longname, field_name)) return info.shortname;
+            }
+            return null;
+        }
+
         pub fn run(parsed: Parsed, ctx: Context) !void {
             switch (parsed) {
                 inline else => |payload, tag| {
-                    const handler = commands[@intFromEnum(tag)].handler;
-                    try call(handler, ctx, payload.options);
+                    const cmd = commands[@intFromEnum(tag)];
+                    try call(cmd, ctx, payload.options);
                 },
             }
         }
 
-        fn call(comptime handler: type, ctx: Context, opts: handler.Options) !void {
-            const F = @TypeOf(handler.run);
+        fn call(comptime command: Command, ctx: Context, opts: command.options) !void {
+            const F = @TypeOf(command.handler.?.run);
             var args: std.meta.ArgsTuple(F) = undefined;
             inline for (@typeInfo(F).@"fn".params, 0..) |param, i| {
                 const T = param.type orelse @compileError("Generic parameters not supported in run.");
-                args[i] = if (T == handler.Options) opts
-                    else if (T == Context) ctx
-                    else fromContext(T, ctx);
+                args[i] = if (T == command.options) opts else if (T == Context) ctx else fromContext(T, ctx);
             }
-            return @call(.auto, handler.run, args);
+            return @call(.auto, command.handler.?.run, args);
         }
 
         fn fromContext(comptime T: type, ctx: Context) T {
